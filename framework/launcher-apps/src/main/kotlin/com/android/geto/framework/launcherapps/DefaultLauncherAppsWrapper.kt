@@ -33,7 +33,10 @@ import com.android.geto.domain.model.LauncherAppsActivityInfo
 import com.android.geto.framework.drawable.AndroidDrawableWrapper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -55,12 +58,19 @@ internal class DefaultLauncherAppsWrapper @Inject constructor(
 
     override fun getActivityListFlow(): Flow<List<LauncherAppsActivityInfo>> = callbackFlow {
         suspend fun getActivityList() {
-            val activities =
+            // 之前这里用 .map { } 对每个应用串行做"图标转PNG + 单独查一次系统安装时间"，
+            // 应用数量一多（国产 ROM 常见两三百个预装包）串行跑下来就会卡很久。改成
+            // coroutineScope + async 并发处理，所有应用的这两步同时进行，总耗时基本
+            // 取决于最慢的那一个，而不是所有应用耗时的总和。
+            val activities = coroutineScope {
                 launcherApps.getActivityList(null, myUserHandle()).map { launcherActivityInfo ->
-                    currentCoroutineContext().ensureActive()
+                    async {
+                        currentCoroutineContext().ensureActive()
 
-                    launcherActivityInfo.toLauncherAppsActivityInfo()
-                }
+                        launcherActivityInfo.toLauncherAppsActivityInfo()
+                    }
+                }.awaitAll()
+            }
 
             trySend(activities)
         }
